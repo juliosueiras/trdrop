@@ -5,6 +5,7 @@
 #include <QQmlContext>
 #include <QFontDatabase>
 //#include <QQmlDebuggingEnabler>
+#include <QCommandLineParser>
 
 #include "opencv2/core/core.hpp"
 #include "opencv2/highgui/highgui.hpp"
@@ -35,7 +36,27 @@ int main(int argc, char *argv[])
     // general application stuff
     //QQmlDebuggingEnabler enabler;
     QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
+    QCoreApplication::setApplicationName("trdrop");
     QApplication app(argc, argv);
+
+    QCommandLineParser parser;
+    parser.setApplicationDescription("trdrop - command line version");
+    parser.addHelpOption();
+    parser.addVersionOption();
+
+    // Add custom options
+    parser.addPositionalArgument("source video", QCoreApplication::translate("main", "Source video file"));
+    parser.addPositionalArgument("destination directory", QCoreApplication::translate("main", "Destination directory"));
+    //
+    parser.addOption(QCommandLineOption{{"n", "image-prefix"}, QCoreApplication::translate("main", "image prefix name"), QCoreApplication::translate("main", "image prefix name")});
+
+    parser.process(app);
+
+    if (parser.isSet("help")) {
+        parser.showHelp();
+        return 0;
+    }
+
     QQmlApplicationEngine engine;
     app.setOrganizationName("trdrop");
     app.setOrganizationDomain("trdrop");
@@ -168,7 +189,46 @@ int main(int argc, char *argv[])
     // if new videos are added, update the count so we can export the correct amount of entries for the csv file
     QObject::connect(&file_item_model,                 &FileItemModel::updateFileItemPaths, &exporter_qml, &ExporterQML::updateVideoCount);
 
+
     // load application
     engine.load(QUrl(QStringLiteral("qrc:/qml/main.qml")));
-    return app.exec();
+
+    const QStringList args = parser.positionalArguments();
+    if (args.length() != 2) { 
+        return app.exec();
+    };
+    QString imagesequence = parser.value("n");
+    if (imagesequence.isEmpty()) {
+        imagesequence = "default_image_";
+    }
+    QString source = args.at(0);
+    QString destination = args.at(1);
+
+
+    shared_resolution_model->setActiveValueAt(3);
+    shared_export_options_model->setData(QModelIndex(), false, shared_export_options_model->EnableLivePreviewValueRole);
+    shared_export_options_model->setData(QModelIndex(), imagesequence, shared_export_options_model->ImagesequencePrefixValueRole);
+    shared_export_options_model->setData(QModelIndex(), destination, shared_export_options_model->ExportDirectoryValueRole);
+    shared_general_options_model->setData(QModelIndex(), false, shared_general_options_model->EnableTearsValueRole);
+    file_item_model.setData(file_item_model.index(0), QString("file://%s").arg(source), file_item_model.QtFilePathRole);
+    file_item_model.setData(file_item_model.index(0), source, file_item_model.FilePathRole);
+    file_item_model.setData(file_item_model.index(0), true, file_item_model.FileSelectedRole);
+    file_item_model.setData(file_item_model.index(0), 60, file_item_model.RecordedFramerateRole);
+
+    file_item_model.setData(file_item_model.index(0), file_item_model.getFileSize(source), file_item_model.SizeMBRole);
+    file_item_model.emitFilePaths(QList<QVariant>{source});
+    file_item_model.resetModel();
+    file_item_model.setRecordedFramerates(QList<QVariant>{source}
+            ,videocapturelist_qml.getRecordedFramerates());
+    framerate_options_model.updateEnabledRows(QList<QVariant>{source});
+    tear_options_model.updateEnabledRows(QList<QVariant>{source});
+    shared_export_options_model->setEnabledExportButton(true);
+    videocapturelist_qml.openAllPaths(QList<QVariant>{source});
+    frame_processing_qml.resetState(videocapturelist_qml.getUnsignedRecordedFramerates());
+    exporter_qml.startExporting();
+    while (exporter_qml.isExporting()){
+        videocapturelist_qml.readNextFrames();
+        qInfo("Progress: %.2f", videocapturelist_qml.getShortestVideoProgress().toDouble() * 100);
+    }
+    return 0;
 }
